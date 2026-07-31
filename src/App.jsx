@@ -41,12 +41,15 @@ export default function App() {
   // Room State
   const [roomCode, setRoomCode] = useState(initialRoomCode);
   const [isHost, setIsHost] = useState(false);
-  const [roomStatus, setRoomStatus] = useState('WAITING'); // 'WAITING' | 'IN_PROGRESS' | 'COMPLETED'
+  const [roomStatus, setRoomStatus] = useState('WAITING');
   const [isPaused, setIsPaused] = useState(false);
   const [currentLotIndex, setCurrentLotIndex] = useState(0);
   const [currentBid, setCurrentBid] = useState(0);
   const [highestBidder, setHighestBidder] = useState(null);
   const [timerSeconds, setTimerSeconds] = useState(10);
+  // timerStartedAt: epoch ms when current lot timer was (re)started
+  const [timerStartedAt, setTimerStartedAt] = useState(null);
+  const [timerDuration, setTimerDuration] = useState(10);
   const [managers, setManagers] = useState([]);
   const [chatMessages, setChatMessages] = useState([]);
   const [activityLogs, setActivityLogs] = useState([]);
@@ -95,9 +98,19 @@ export default function App() {
     setCurrentLotIndex(state.currentLotIndex || 0);
     setCurrentBid(state.currentBid || 0);
     setHighestBidder(state.highestBidder || null);
-    setTimerSeconds(state.timerSeconds !== undefined ? state.timerSeconds : 10);
     if (state.deckOrder) setDeckOrder(state.deckOrder);
     setAvailableDeck(PLAYER_DATABASE);
+    // Sync timer from Firebase snapshot
+    if (state.timerStartedAt) {
+      setTimerStartedAt(state.timerStartedAt);
+      setTimerDuration(state.timerDuration || 10);
+      // Compute remaining seconds from timestamp
+      const elapsed = (Date.now() - state.timerStartedAt) / 1000;
+      const remaining = Math.max(0, Math.round((state.timerDuration || 10) - elapsed));
+      setTimerSeconds(remaining);
+    } else {
+      setTimerSeconds(state.timerSeconds !== undefined ? state.timerSeconds : 10);
+    }
     if (state.managers) setManagers(state.managers);
     if (state.chatMessages) setChatMessages(state.chatMessages);
     if (state.activityLogs) setActivityLogs(state.activityLogs);
@@ -158,7 +171,7 @@ export default function App() {
     } else {
       soldLog = {
         type: 'UNSOLD',
-        text: `${soldPlayer?.name} went unsold at £${currentState.currentBid || 0}M.`,
+        text: `${soldPlayer?.name} went unsold.`,
         time: formatTime()
       };
     }
@@ -168,38 +181,43 @@ export default function App() {
     const updatedLogs = [...currentLogs, soldLog];
     setActivityLogs(updatedLogs);
 
+    const now = Date.now();
+    setTimerStartedAt(now);
+    setTimerDuration(10);
+
     broadcastStateChange({
       managers: updatedManagers,
       deckOrder: currentDeck,
       currentLotIndex: nextIndex,
       currentBid: 0,
       highestBidder: null,
+      timerStartedAt: now,
+      timerDuration: 10,
       timerSeconds: 10,
       isPaused: false,
       activityLogs: updatedLogs
     });
   };
 
-  // 1. Host Countdown Timer Interval (Runs only when status === 'IN_PROGRESS')
+  // ─── Local visual countdown for ALL clients (no Firebase writes per tick) ───
   useEffect(() => {
-    if (!isHost || isPaused || roomStatus !== 'IN_PROGRESS' || !currentLot) return;
+    if (roomStatus !== 'IN_PROGRESS' || isPaused || !timerStartedAt) return;
 
-    const timer = setInterval(() => {
-      const currentState = roomSyncRef.current?.getRoomState();
-      if (!currentState || currentState.isPaused || currentState.status !== 'IN_PROGRESS') return;
+    const tick = setInterval(() => {
+      const elapsed = (Date.now() - timerStartedAt) / 1000;
+      const remaining = Math.max(0, Math.round(timerDuration - elapsed));
+      setTimerSeconds(remaining);
 
-      const currentSecs = currentState.timerSeconds !== undefined ? currentState.timerSeconds : 10;
-      const newTime = currentSecs - 1;
-      if (newTime <= 0) {
-        clearInterval(timer);
-        advanceToNextLot(currentState.highestBidder, currentState.currentBid || 0);
-      } else {
-        broadcastStateChange({ timerSeconds: newTime });
+      // HOST: when countdown hits 0, advance the lot (only host fires this)
+      if (remaining <= 0 && isHost) {
+        clearInterval(tick);
+        const currentState = roomSyncRef.current?.getRoomState();
+        advanceToNextLot(currentState?.highestBidder || null, currentState?.currentBid || 0);
       }
-    }, 1000);
+    }, 500); // poll every 500ms for smooth display
 
-    return () => clearInterval(timer);
-  }, [isHost, isPaused, roomStatus, currentLotIndex]);
+    return () => clearInterval(tick);
+  }, [timerStartedAt, timerDuration, roomStatus, isPaused, isHost]);
 
   // Create Room action from Home
   const handleCreateRoom = (newCode, isPublic) => {
@@ -230,9 +248,15 @@ export default function App() {
   // Host starts auction game
   const handleStartAuction = () => {
     const startLog = { type: 'START', text: 'Auction has started!', time: formatTime() };
+    const now = Date.now();
     setActivityLogs([startLog]);
+    setTimerStartedAt(now);
+    setTimerDuration(10);
     broadcastStateChange({
       status: 'IN_PROGRESS',
+      timerStartedAt: now,
+      timerDuration: 10,
+      timerSeconds: 10,
       activityLogs: [startLog],
       chatMessages: [
         ...chatMessages,
@@ -303,9 +327,15 @@ export default function App() {
     const updatedLogs = [...activityLogs, newLog];
     setActivityLogs(updatedLogs);
 
+    const now = Date.now();
+    setTimerStartedAt(now);
+    setTimerDuration(10);
+
     broadcastStateChange({
       currentBid: amount,
       highestBidder: newBidder,
+      timerStartedAt: now,
+      timerDuration: 10,
       timerSeconds: 10,
       activityLogs: updatedLogs
     });
