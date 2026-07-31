@@ -273,7 +273,7 @@ export default function App() {
     if (currentState.highestBidder) {
       const winnerId = currentState.highestBidder.id;
       const price = currentState.currentBid;
-      const soldPlayer = currentState.availableDeck[currentState.currentLotIndex];
+      const soldPlayer = PLAYER_DATABASE[currentState.currentLotIndex] || currentLot;
 
       soldLog = { type: 'SOLD', text: `${soldPlayer?.name} sold to ${currentState.highestBidder.teamName} for £${price}M!`, time: formatTime() };
 
