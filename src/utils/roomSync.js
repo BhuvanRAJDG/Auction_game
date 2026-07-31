@@ -136,6 +136,13 @@ export class RoomSync {
         { sender: 'System', text: `${userName} joined the room.`, time: formatTime(), isSystem: true }
       ];
 
+      if (state.isPublic !== false) {
+        this.updatePublicRoomsList({
+          ...state,
+          managers: updatedManagers
+        });
+      }
+
       // Write ONLY the updated managers & chat to Firebase (not the full state)
       const dbRef = ref(database, `rooms/${this.roomCode}`);
       update(dbRef, {
@@ -254,6 +261,9 @@ export class RoomSync {
   _writeToFirebase(state) {
     const lightState = stripHeavyFields(state);
     this.cachedState = state; // Cache includes availableDeck locally
+    if (state.isPublic) {
+      this.updatePublicRoomsList(state);
+    }
     const dbRef = ref(database, `rooms/${this.roomCode}`);
     return set(dbRef, lightState).catch(err => {
       console.error('Firebase write error:', err);
