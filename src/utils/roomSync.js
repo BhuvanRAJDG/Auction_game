@@ -12,6 +12,15 @@ function stripHeavyFields(state) {
   return lightState;
 }
 
+function generateShuffledDeck() {
+  const arr = Array.from({ length: 250 }, (_, i) => i);
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
 export class RoomSync {
   constructor(roomCode, onStateChange, options = {}) {
     this.roomCode = roomCode ? roomCode.toUpperCase() : 'DEFAULT';
@@ -78,6 +87,7 @@ export class RoomSync {
           status: 'WAITING',
           isPublic: isPublic ?? true,
           isPaused: false,
+          deckOrder: generateShuffledDeck(),
           currentLotIndex: 0,
           currentBid: 0,
           highestBidder: null,
@@ -175,6 +185,7 @@ export class RoomSync {
           status: 'WAITING',
           isPublic: isPublic ?? true,
           isPaused: false,
+          deckOrder: generateShuffledDeck(),
           currentLotIndex: 0,
           currentBid: 0,
           highestBidder: null,

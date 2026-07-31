@@ -51,13 +51,15 @@ export default function App() {
   const [chatMessages, setChatMessages] = useState([]);
   const [activityLogs, setActivityLogs] = useState([]);
   const [availableDeck, setAvailableDeck] = useState(PLAYER_DATABASE);
+  const [deckOrder, setDeckOrder] = useState(() => Array.from({ length: PLAYER_DATABASE.length }, (_, i) => i));
   const [isCreatingRoom, setIsCreatingRoom] = useState(false);
   const [isPublicRoom, setIsPublicRoom] = useState(true);
 
   const roomSyncRef = useRef(null);
 
-  // Active player on block
-  const currentLot = availableDeck[currentLotIndex] || null;
+  // Active player on block (randomized from deckOrder)
+  const currentLotPlayerIndex = deckOrder[currentLotIndex] !== undefined ? deckOrder[currentLotIndex] : currentLotIndex;
+  const currentLot = PLAYER_DATABASE[currentLotPlayerIndex] || PLAYER_DATABASE[0];
 
   // Sync state whenever roomCode changes
   useEffect(() => {
@@ -94,8 +96,7 @@ export default function App() {
     setCurrentBid(state.currentBid || 0);
     setHighestBidder(state.highestBidder || null);
     setTimerSeconds(state.timerSeconds !== undefined ? state.timerSeconds : 10);
-    // IMPORTANT: Never sync availableDeck from Firebase — always use local PLAYER_DATABASE
-    // This prevents 250-player JSON being written to Firebase on every timer tick
+    if (state.deckOrder) setDeckOrder(state.deckOrder);
     setAvailableDeck(PLAYER_DATABASE);
     if (state.managers) setManagers(state.managers);
     if (state.chatMessages) setChatMessages(state.chatMessages);
@@ -125,6 +126,60 @@ export default function App() {
     roomSyncRef.current?.saveAndBroadcast(newState);
   };
 
+  const advanceToNextLot = (winnerBidder = null, price = 0) => {
+    const currentState = roomSyncRef.current?.getRoomState() || {};
+    audioSystem.playHammer();
+
+    const currentIdx = currentState.currentLotIndex || 0;
+    const currentDeck = currentState.deckOrder || deckOrder;
+    const playerIdx = currentDeck[currentIdx] !== undefined ? currentDeck[currentIdx] : currentIdx;
+    const soldPlayer = PLAYER_DATABASE[playerIdx] || currentLot;
+
+    let currentManagers = Array.isArray(currentState.managers) ? currentState.managers : managers;
+    let updatedManagers = [...currentManagers];
+    let soldLog = null;
+
+    if (winnerBidder) {
+      soldLog = {
+        type: 'SOLD',
+        text: `${soldPlayer?.name} sold to ${winnerBidder.teamName} for £${price}M!`,
+        time: formatTime()
+      };
+      updatedManagers = updatedManagers.map(m => {
+        if (m.id === winnerBidder.id) {
+          return {
+            ...m,
+            budget: m.budget - price,
+            squad: [...(m.squad || []), soldPlayer]
+          };
+        }
+        return m;
+      });
+    } else {
+      soldLog = {
+        type: 'UNSOLD',
+        text: `${soldPlayer?.name} went unsold at £${currentState.currentBid || 0}M.`,
+        time: formatTime()
+      };
+    }
+
+    const nextIndex = currentIdx + 1;
+    const currentLogs = Array.isArray(currentState.activityLogs) ? currentState.activityLogs : activityLogs;
+    const updatedLogs = [...currentLogs, soldLog];
+    setActivityLogs(updatedLogs);
+
+    broadcastStateChange({
+      managers: updatedManagers,
+      deckOrder: currentDeck,
+      currentLotIndex: nextIndex,
+      currentBid: 0,
+      highestBidder: null,
+      timerSeconds: 10,
+      isPaused: false,
+      activityLogs: updatedLogs
+    });
+  };
+
   // 1. Host Countdown Timer Interval (Runs only when status === 'IN_PROGRESS')
   useEffect(() => {
     if (!isHost || isPaused || roomStatus !== 'IN_PROGRESS' || !currentLot) return;
@@ -133,10 +188,11 @@ export default function App() {
       const currentState = roomSyncRef.current?.getRoomState();
       if (!currentState || currentState.isPaused || currentState.status !== 'IN_PROGRESS') return;
 
-      const newTime = currentState.timerSeconds - 1;
+      const currentSecs = currentState.timerSeconds !== undefined ? currentState.timerSeconds : 10;
+      const newTime = currentSecs - 1;
       if (newTime <= 0) {
         clearInterval(timer);
-        handleHostSellNow();
+        advanceToNextLot(currentState.highestBidder, currentState.currentBid || 0);
       } else {
         broadcastStateChange({ timerSeconds: newTime });
       }
@@ -263,57 +319,12 @@ export default function App() {
   // Host Sell Now
   const handleHostSellNow = () => {
     const currentState = roomSyncRef.current?.getRoomState();
-    if (!currentState) return;
-
-    audioSystem.playHammer();
-
-    let updatedManagers = [...currentState.managers];
-    let soldLog = null;
-
-    if (currentState.highestBidder) {
-      const winnerId = currentState.highestBidder.id;
-      const price = currentState.currentBid;
-      const soldPlayer = PLAYER_DATABASE[currentState.currentLotIndex] || currentLot;
-
-      soldLog = { type: 'SOLD', text: `${soldPlayer?.name} sold to ${currentState.highestBidder.teamName} for £${price}M!`, time: formatTime() };
-
-      updatedManagers = updatedManagers.map(m => {
-        if (m.id === winnerId) {
-          return {
-            ...m,
-            budget: m.budget - price,
-            squad: [...m.squad, soldPlayer]
-          };
-        }
-        return m;
-      });
-    }
-
-    const nextIndex = currentState.currentLotIndex + 1;
-    const updatedLogs = soldLog ? [...activityLogs, soldLog] : activityLogs;
-    setActivityLogs(updatedLogs);
-
-    broadcastStateChange({
-      managers: updatedManagers,
-      currentLotIndex: nextIndex,
-      currentBid: 0,
-      highestBidder: null,
-      timerSeconds: 10,
-      activityLogs: updatedLogs
-    });
+    advanceToNextLot(currentState?.highestBidder, currentState?.currentBid || 0);
   };
 
   // Host Skip Lot
   const handleHostSkipLot = () => {
-    const currentState = roomSyncRef.current?.getRoomState();
-    if (!currentState) return;
-
-    broadcastStateChange({
-      currentLotIndex: currentState.currentLotIndex + 1,
-      currentBid: 0,
-      highestBidder: null,
-      timerSeconds: 10
-    });
+    advanceToNextLot(null, 0);
   };
 
   // Host Nominate specific player
