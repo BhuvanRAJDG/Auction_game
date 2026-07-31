@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { FOOTBALL_CLUBS } from '../data/teamsData';
 import { RoomSync } from '../utils/roomSync';
 import { Zap, Globe, Lock, Users, ArrowRight, Shield, Flame } from 'lucide-react';
+import { isConfigured } from '../utils/firebase';
 
 export default function HomeDashboard({
   userName,
@@ -80,8 +81,12 @@ export default function HomeDashboard({
         </h1>
 
         <div className="hero-pills-row">
-          <span className="pill-item yellow-pill">🔥 2026 Official List • 150 players</span>
-          <span className="pill-item green-pill">⚡ Real-Time Online Multiplayer</span>
+          <span className="pill-item yellow-pill">🔥 2026 Official List • 250 players</span>
+          {isConfigured ? (
+            <span className="pill-item green-pill">🌐 Online Mode (Connected to Firebase)</span>
+          ) : (
+            <span className="pill-item red-pill">🔌 Offline Mode (Local Sync Only)</span>
+          )}
         </div>
       </div>
 

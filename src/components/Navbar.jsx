@@ -1,5 +1,6 @@
 import React from 'react';
 import { Pause, Play, Zap, Home } from 'lucide-react';
+import { isConfigured } from '../utils/firebase';
 
 export default function Navbar({
   roomCode,
@@ -24,6 +25,9 @@ export default function Navbar({
           <div className="online-count-badge">
             <span className="green-dot" />
             {managerCount} online
+          </div>
+          <div className={`sync-status-badge ${isConfigured ? 'firebase' : 'local'}`}>
+            {isConfigured ? '🟢 Firebase' : '⚠️ Local Sync'}
           </div>
         </div>
 
