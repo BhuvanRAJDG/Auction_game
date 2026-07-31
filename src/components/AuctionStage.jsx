@@ -21,11 +21,13 @@ export default function AuctionStage({
   activityLogs = [],
   chatMessages = [],
   myUserId,
+  managers = [],
   onPlaceBid,
   onSendMessage,
   onNominateNext,
 }) {
   const [activeTab, setActiveTab] = useState('ACTIVITY');
+  const [expandedManagerId, setExpandedManagerId] = useState(myUserId);
   const [bidIncrement, setBidIncrement] = useState(1);
   const [showIncrMenu, setShowIncrMenu] = useState(false);
   const [chatInput, setChatInput] = useState('');
@@ -240,25 +242,99 @@ export default function AuctionStage({
 
           {/* SQUAD TAB */}
           {activeTab === 'SQUAD' && (
-            <div className="squad-tab-content">
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontWeight: 800, fontSize: '0.95rem' }}>{userTeam?.badge} {userTeam?.name}</span>
-                <span style={{ color: 'var(--accent-gold)', fontSize: '0.8rem' }}>£{userBudget}M remaining</span>
-              </div>
+            <div className="squad-tab-content" style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              {managers.map(m => {
+                const isMe = m.id === myUserId;
+                const isExpanded = expandedManagerId === m.id;
+                const squadCount = m.squad ? m.squad.length : 0;
+                
+                // Group squad by position categories (FORWARD, MIDFIELDER, DEFENDER, GOALKEEPER)
+                const getPositionCategory = (pos) => {
+                  if (!pos) return 'OTHER';
+                  const p = pos.toUpperCase();
+                  if (p.includes('ST') || p.includes('CF') || p.includes('LW') || p.includes('RW')) return 'FORWARD';
+                  if (p.includes('CM') || p.includes('CAM') || p.includes('CDM') || p.includes('LM') || p.includes('RM')) return 'MIDFIELDER';
+                  if (p.includes('CB') || p.includes('LB') || p.includes('RB') || p.includes('RWB') || p.includes('LWB')) return 'DEFENDER';
+                  if (p.includes('GK')) return 'GOALKEEPER';
+                  return 'OTHER';
+                };
 
-              {userSquad.length === 0 ? (
-                <p className="empty-squad">No players signed yet. Start bidding!</p>
-              ) : (
-                <div className="squad-grid-simple">
-                  {userSquad.map(p => (
-                    <div className="squad-item-card" key={p.id}>
-                      <span className="pos">{p.position}</span>
-                      <span className="rating">{p.rating}</span>
-                      <span className="name">{p.name}</span>
+                const groupedSquad = {};
+                if (m.squad) {
+                  m.squad.forEach(p => {
+                    const cat = getPositionCategory(p.position);
+                    if (!groupedSquad[cat]) groupedSquad[cat] = [];
+                    groupedSquad[cat].push(p);
+                  });
+                }
+
+                // Spent budget (starting budget is 1000)
+                const spent = 1000 - m.budget;
+
+                return (
+                  <div 
+                    key={m.id} 
+                    className={`manager-squad-accordion-card ${isExpanded ? 'expanded' : ''}`} 
+                    style={{ 
+                      border: '1px solid #333', 
+                      borderRadius: '8px', 
+                      padding: '12px', 
+                      background: '#111',
+                      transition: 'all 0.2s ease-in-out'
+                    }}
+                  >
+                    <div 
+                      onClick={() => setExpandedManagerId(isExpanded ? null : m.id)}
+                      style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer' }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#4CAF50', display: 'inline-block' }}></span>
+                        <span style={{ fontWeight: 800 }}>{m.userName}</span>
+                        {isMe && <span style={{ background: '#555', color: '#fff', fontSize: '0.65rem', padding: '2px 6px', borderRadius: '4px', fontWeight: 700 }}>YOU</span>}
+                      </div>
+                      <span style={{ fontSize: '0.9rem', color: '#888' }}>{squadCount} players</span>
                     </div>
-                  ))}
-                </div>
-              )}
+
+                    <div style={{ fontSize: '0.8rem', color: '#aaa', marginTop: '4px' }}>
+                      <span>{m.badge || '🛡️'} {m.teamName || 'Unknown Team'}</span>
+                    </div>
+
+                    {isExpanded && (
+                      <div style={{ marginTop: '12px', borderTop: '1px solid #222', paddingTop: '12px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px', fontSize: '0.85rem' }}>
+                          <span style={{ color: '#aaa' }}>Purse: <strong style={{ color: '#4CAF50' }}>£{m.budget}M</strong></span>
+                          <span style={{ color: '#aaa' }}>Spent: <strong style={{ color: '#FF9800' }}>£{spent}M</strong></span>
+                        </div>
+
+                        <div style={{ fontWeight: 700, fontSize: '0.85rem', marginBottom: '8px', color: '#4CAF50' }}>Bought ({squadCount})</div>
+
+                        {squadCount === 0 ? (
+                          <p style={{ fontSize: '0.8rem', color: '#666', fontStyle: 'italic' }}>No players signed yet.</p>
+                        ) : (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                            {Object.keys(groupedSquad).map(cat => (
+                              <div key={cat}>
+                                <div style={{ fontSize: '0.75rem', fontWeight: 800, color: '#888', marginBottom: '4px' }}>{cat} ({groupedSquad[cat].length})</div>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                  {groupedSquad[cat].map(p => (
+                                    <div key={p.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#1c1c1c', padding: '6px 10px', borderRadius: '4px', fontSize: '0.8rem' }}>
+                                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                        <span style={{ color: 'var(--accent-gold)', fontWeight: 700 }}>⭐{p.rating}</span>
+                                        <span>{p.name}</span>
+                                      </div>
+                                      <span style={{ color: 'var(--accent-gold)', fontWeight: 700 }}>£{p.boughtPrice || p.basePrice || 0}M</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
 

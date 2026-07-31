@@ -103,7 +103,7 @@ export class RoomSync {
               teamId: selectedClub?.id || 'MUTD',
               teamName: selectedClub?.name || 'Manchester United',
               badge: selectedClub?.badge || '🔴',
-              budget: 2000,
+              budget: 1000,
               squad: []
             }
           ],
@@ -136,7 +136,7 @@ export class RoomSync {
           teamId: selectedClub?.id || 'MUTD',
           teamName: selectedClub?.name || 'Manchester United',
           badge: selectedClub?.badge || '🔴',
-          budget: 2000,
+          budget: 1000,
           squad: []
         }
       ];
@@ -200,7 +200,7 @@ export class RoomSync {
               teamId: selectedClub?.id || 'MUTD',
               teamName: selectedClub?.name || 'Manchester United',
               badge: selectedClub?.badge || '🔴',
-              budget: 2000,
+              budget: 1000,
               squad: []
             }
           ],
@@ -228,7 +228,7 @@ export class RoomSync {
           teamId: selectedClub?.id || 'MUTD',
           teamName: selectedClub?.name || 'Manchester United',
           badge: selectedClub?.badge || '🔴',
-          budget: 2000,
+          budget: 1000,
           squad: []
         }
       ];
@@ -299,20 +299,26 @@ export class RoomSync {
     this.cachedState = newState;
 
     if (isConfigured && database) {
-      // Strip availableDeck before writing to Firebase
-      // This prevents flooding Firebase with 250 players on every state change
       const lightState = stripHeavyFields(newState);
       const dbRef = ref(database, `rooms/${this.roomCode}`);
-      set(dbRef, lightState)
-        .then(() => {
-          if (newState.isPublic) this.updatePublicRoomsList(newState);
-        })
-        .catch(err => {
-          console.error('Firebase saveAndBroadcast error:', err);
-          if (err.code === 'PERMISSION_DENIED') {
-            alert('Firebase Permission Denied! Set Realtime Database Rules to Test Mode.');
-          }
-        });
+      
+      const isRoomHost = newState.hostId === this.options.myUserId;
+      if (!isRoomHost) {
+        // Non-hosts must never overwrite host-controlled lot progress variables
+        const { currentLotIndex, deckOrder, status, isPaused, hostId, roomCode, isPublic, ...clientUpdate } = lightState;
+        update(dbRef, clientUpdate)
+          .then(() => {
+            if (newState.isPublic) this.updatePublicRoomsList(newState);
+          })
+          .catch(err => console.error('Firebase saveAndBroadcast client error:', err));
+      } else {
+        // Host updates everything
+        update(dbRef, lightState)
+          .then(() => {
+            if (newState.isPublic) this.updatePublicRoomsList(newState);
+          })
+          .catch(err => console.error('Firebase saveAndBroadcast host error:', err));
+      }
     } else {
       this._broadcastLocal(newState);
       this.onStateChange(newState);

@@ -59,6 +59,12 @@ export default function App() {
   const [isPublicRoom, setIsPublicRoom] = useState(true);
 
   const roomSyncRef = useRef(null);
+  const stateRef = useRef({ currentLotIndex: 0, isHost: false });
+
+  // Update stateRef to keep track of latest currentLotIndex and isHost inside callbacks
+  useEffect(() => {
+    stateRef.current = { currentLotIndex, isHost };
+  }, [currentLotIndex, isHost]);
 
   // Active player on block (randomized from deckOrder)
   const currentLotPlayerIndex = deckOrder[currentLotIndex] !== undefined ? deckOrder[currentLotIndex] : currentLotIndex;
@@ -124,6 +130,12 @@ export default function App() {
   };
 
   const handleRemoteStateChange = (newState) => {
+    // Prevent stale remote state updates from pulling currentLotIndex backwards (due to network latency)
+    const latest = stateRef.current;
+    if (latest.isHost && newState && newState.currentLotIndex !== undefined && newState.currentLotIndex < latest.currentLotIndex) {
+      console.warn("Stale Firebase snapshot ignored. Local Lot Index:", latest.currentLotIndex, "Remote Lot Index:", newState.currentLotIndex);
+      return;
+    }
     applyRoomState(newState);
   };
 
@@ -163,7 +175,7 @@ export default function App() {
           return {
             ...m,
             budget: m.budget - price,
-            squad: [...(m.squad || []), soldPlayer]
+            squad: [...(m.squad || []), { ...soldPlayer, boughtPrice: price }]
           };
         }
         return m;
@@ -380,7 +392,7 @@ export default function App() {
   const myManager = managers.find(m => m.id === myUserId) || {
     badge: selectedClub.badge,
     teamName: selectedClub.name,
-    budget: 2000,
+    budget: 1000,
     squad: []
   };
 
@@ -442,6 +454,7 @@ export default function App() {
           activityLogs={activityLogs}
           chatMessages={chatMessages}
           myUserId={myUserId}
+          managers={managers}
           onPlaceBid={handlePlaceBid}
           onSendMessage={handleSendMessage}
           onNominateNext={handleHostSkipLot}

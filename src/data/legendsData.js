@@ -1,19 +1,19 @@
-// Base price logic by rating
+// Base price logic by rating (max 50M for Messi 99, scaled down)
 function basePrice(rating) {
-  if (rating >= 99) return 250;
-  if (rating >= 98) return 220;
-  if (rating >= 97) return 190;
-  if (rating >= 96) return 160;
-  if (rating >= 95) return 130;
-  if (rating >= 94) return 110;
-  if (rating >= 93) return 90;
-  if (rating >= 92) return 75;
-  if (rating >= 91) return 60;
-  if (rating >= 90) return 50;
-  if (rating >= 89) return 40;
-  if (rating >= 88) return 30;
-  if (rating >= 86) return 22;
-  return 18;
+  if (rating >= 99) return 50;
+  if (rating >= 98) return 45;
+  if (rating >= 97) return 40;
+  if (rating >= 96) return 35;
+  if (rating >= 95) return 30;
+  if (rating >= 94) return 25;
+  if (rating >= 93) return 20;
+  if (rating >= 92) return 15;
+  if (rating >= 91) return 12;
+  if (rating >= 90) return 10;
+  if (rating >= 89) return 8;
+  if (rating >= 88) return 6;
+  if (rating >= 86) return 4;
+  return 3;
 }
 
 const RAW_PLAYERS = [
