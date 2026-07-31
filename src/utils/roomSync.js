@@ -1,10 +1,15 @@
-import { ref, onValue, set, off } from 'firebase/database';
+import { ref, onValue, set, update, off } from 'firebase/database';
 import { database, isConfigured } from './firebase';
-import { PLAYER_DATABASE } from '../data/legendsData';
 
 function formatTime() {
   const d = new Date();
   return d.toTimeString().split(' ')[0].substring(0, 5);
+}
+
+// Strip large fields that should NOT be synced through Firebase
+function stripHeavyFields(state) {
+  const { availableDeck, ...lightState } = state;
+  return lightState;
 }
 
 export class RoomSync {
@@ -14,38 +19,34 @@ export class RoomSync {
     this.options = options;
     this.channelName = `football_auction_room_${this.roomCode}`;
     this.storageKey = `football_auction_data_${this.roomCode}`;
-    
+
     this.broadcastChannel = null;
     this.cachedState = null;
-    this.isInitialized = false;
-    this.firebaseListener = null;
+    this.unsubscribeFn = null; // Firebase unsubscribe function
 
     this.init();
   }
 
   init() {
     if (isConfigured && database) {
-      // ----------------------------------------------------
+      // -----------------------------------------------
       // FIREBASE ONLINE REALTIME SYNC
-      // ----------------------------------------------------
+      // -----------------------------------------------
       const dbRef = ref(database, `rooms/${this.roomCode}`);
-      this.firebaseListener = onValue(dbRef, (snapshot) => {
+      this.unsubscribeFn = onValue(dbRef, (snapshot) => {
         const val = snapshot.val();
-        
-        if (!this.isInitialized) {
-          this.isInitialized = true;
-          this.handleInitialState(val);
-        } else {
-          if (val) {
-            this.cachedState = val;
-            this.onStateChange(val);
-          }
+        this._handleFirebaseSnapshot(val);
+      }, (err) => {
+        console.error('Firebase read error:', err);
+        if (err.code === 'PERMISSION_DENIED') {
+          alert('Firebase Permission Denied! Go to Firebase Console → Realtime Database → Rules and set both .read and .write to "true".');
         }
       });
+
     } else {
-      // ----------------------------------------------------
+      // -----------------------------------------------
       // LOCAL BROADCAST & STORAGE SYNC (Fallback)
-      // ----------------------------------------------------
+      // -----------------------------------------------
       if ('BroadcastChannel' in window) {
         this.broadcastChannel = new BroadcastChannel(this.channelName);
         this.broadcastChannel.onmessage = (event) => {
@@ -55,34 +56,22 @@ export class RoomSync {
           }
         };
       }
-
       window.addEventListener('storage', this.handleStorageEvent);
 
-      // Initialize state from localStorage
+      // Initialize from localStorage
       const localVal = this.getLocalStorageState();
-      this.handleInitialState(localVal);
+      this._handleLocalSnapshot(localVal);
     }
   }
 
-  handleStorageEvent = (e) => {
-    if (e.key === this.storageKey && e.newValue) {
-      try {
-        const newState = JSON.parse(e.newValue);
-        this.cachedState = newState;
-        this.onStateChange(newState);
-      } catch (err) {
-        console.error('Storage sync error:', err);
-      }
-    }
-  };
-
-  handleInitialState(val) {
+  // Called on EVERY Firebase snapshot update
+  _handleFirebaseSnapshot(val) {
     const { myUserId, userName, selectedClub, isCreating, isPublic, onRoomNotFound } = this.options;
 
     if (!val) {
-      // Room does not exist yet
+      // No room exists in Firebase
       if (isCreating) {
-        // We are the creator, so initialize the room
+        // HOST: create room
         const initialState = {
           hostId: myUserId,
           roomCode: this.roomCode,
@@ -93,7 +82,7 @@ export class RoomSync {
           currentBid: 0,
           highestBidder: null,
           timerSeconds: 10,
-          availableDeck: PLAYER_DATABASE,
+          // NOTE: availableDeck is NOT stored in Firebase
           chatMessages: [
             { sender: 'System', text: `Room ${this.roomCode} created. Share code to invite friends!`, time: formatTime(), isSystem: true }
           ],
@@ -110,48 +99,143 @@ export class RoomSync {
           ],
           activityLogs: []
         };
-        this.saveAndBroadcast(initialState);
+        this._writeToFirebase(initialState);
+        // Don't call onStateChange here - wait for Firebase to confirm the write
+        // by triggering another onValue snapshot
       } else {
-        // User joined but room doesn't exist
-        if (onRoomNotFound) {
-          onRoomNotFound();
-        }
+        // JOINER: room not found
+        if (onRoomNotFound) onRoomNotFound();
       }
-    } else {
-      // Room already exists
-      let state = { ...val };
-      this.cachedState = state;
-
-      // Join room if not already in the room
-      if (myUserId) {
-        if (!state.managers) state.managers = [];
-        let myMgrIndex = state.managers.findIndex(m => m.id === myUserId);
-        if (myMgrIndex === -1) {
-          state.managers.push({
-            id: myUserId,
-            userName,
-            teamId: selectedClub?.id || 'MUTD',
-            teamName: selectedClub?.name || 'Manchester United',
-            badge: selectedClub?.badge || '🔴',
-            budget: 2000,
-            squad: []
-          });
-
-          if (!state.chatMessages) state.chatMessages = [];
-          state.chatMessages.push({
-            sender: 'System',
-            text: `${userName} joined the room.`,
-            time: formatTime(),
-            isSystem: true
-          });
-
-          this.saveAndBroadcast(state);
-          return;
-        }
-      }
-      this.onStateChange(state);
+      return;
     }
+
+    // Room exists in Firebase
+    let state = { ...val };
+
+    // Check if this device is already in the room
+    if (!state.managers) state.managers = [];
+    const myMgrIndex = state.managers.findIndex(m => m.id === myUserId);
+
+    if (myUserId && myMgrIndex === -1) {
+      // JOINER: add self to managers
+      const updatedManagers = [
+        ...state.managers,
+        {
+          id: myUserId,
+          userName,
+          teamId: selectedClub?.id || 'MUTD',
+          teamName: selectedClub?.name || 'Manchester United',
+          badge: selectedClub?.badge || '🔴',
+          budget: 2000,
+          squad: []
+        }
+      ];
+
+      const updatedChat = [
+        ...(state.chatMessages || []),
+        { sender: 'System', text: `${userName} joined the room.`, time: formatTime(), isSystem: true }
+      ];
+
+      // Write ONLY the updated managers & chat to Firebase (not the full state)
+      const dbRef = ref(database, `rooms/${this.roomCode}`);
+      update(dbRef, {
+        managers: updatedManagers,
+        chatMessages: updatedChat
+      }).catch(err => {
+        console.error('Firebase join error:', err);
+        if (err.code === 'PERMISSION_DENIED') {
+          alert('Firebase Permission Denied! Please set Realtime Database Rules to Test Mode.');
+        }
+      });
+      // Don't call onStateChange here - let the next Firebase snapshot handle it
+      return;
+    }
+
+    // This device is already in the room — apply the full state from Firebase
+    this.cachedState = state;
+    this.onStateChange(state);
   }
+
+  // Local (offline) fallback snapshot handler
+  _handleLocalSnapshot(val) {
+    const { myUserId, userName, selectedClub, isCreating, isPublic, onRoomNotFound } = this.options;
+
+    if (!val) {
+      if (isCreating) {
+        const initialState = {
+          hostId: myUserId,
+          roomCode: this.roomCode,
+          status: 'WAITING',
+          isPublic: isPublic ?? true,
+          isPaused: false,
+          currentLotIndex: 0,
+          currentBid: 0,
+          highestBidder: null,
+          timerSeconds: 10,
+          chatMessages: [
+            { sender: 'System', text: `Room ${this.roomCode} created. Share code to invite friends!`, time: formatTime(), isSystem: true }
+          ],
+          managers: [
+            {
+              id: myUserId,
+              userName,
+              teamId: selectedClub?.id || 'MUTD',
+              teamName: selectedClub?.name || 'Manchester United',
+              badge: selectedClub?.badge || '🔴',
+              budget: 2000,
+              squad: []
+            }
+          ],
+          activityLogs: []
+        };
+        this.cachedState = initialState;
+        this._broadcastLocal(initialState);
+        this.onStateChange(initialState);
+      } else {
+        if (onRoomNotFound) onRoomNotFound();
+      }
+      return;
+    }
+
+    let state = { ...val };
+    if (!state.managers) state.managers = [];
+    const myMgrIndex = state.managers.findIndex(m => m.id === myUserId);
+
+    if (myUserId && myMgrIndex === -1) {
+      state.managers = [
+        ...state.managers,
+        {
+          id: myUserId,
+          userName,
+          teamId: selectedClub?.id || 'MUTD',
+          teamName: selectedClub?.name || 'Manchester United',
+          badge: selectedClub?.badge || '🔴',
+          budget: 2000,
+          squad: []
+        }
+      ];
+      state.chatMessages = [
+        ...(state.chatMessages || []),
+        { sender: 'System', text: `${userName} joined the room.`, time: formatTime(), isSystem: true }
+      ];
+      this._broadcastLocal(state);
+    }
+
+    this.cachedState = state;
+    this.onStateChange(state);
+  }
+
+  handleStorageEvent = (e) => {
+    if (e.key === this.storageKey && e.newValue) {
+      try {
+        const newState = JSON.parse(e.newValue);
+        this.cachedState = newState;
+        this.onStateChange(newState);
+      } catch (err) {
+        console.error('Storage sync error:', err);
+      }
+    }
+  };
 
   getLocalStorageState() {
     const raw = localStorage.getItem(this.storageKey);
@@ -167,32 +251,50 @@ export class RoomSync {
     return this.cachedState;
   }
 
+  _writeToFirebase(state) {
+    const lightState = stripHeavyFields(state);
+    this.cachedState = state; // Cache includes availableDeck locally
+    const dbRef = ref(database, `rooms/${this.roomCode}`);
+    return set(dbRef, lightState).catch(err => {
+      console.error('Firebase write error:', err);
+      if (err.code === 'PERMISSION_DENIED') {
+        alert('Firebase Permission Denied! Please set your Realtime Database Rules to Test Mode.');
+      }
+    });
+  }
+
+  _broadcastLocal(state) {
+    try {
+      localStorage.setItem(this.storageKey, JSON.stringify(state));
+      if (this.broadcastChannel) {
+        this.broadcastChannel.postMessage(state);
+      }
+    } catch (e) {
+      console.error('Local broadcast failed:', e);
+    }
+  }
+
   saveAndBroadcast(newState) {
     this.cachedState = newState;
+
     if (isConfigured && database) {
+      // Strip availableDeck before writing to Firebase
+      // This prevents flooding Firebase with 250 players on every state change
+      const lightState = stripHeavyFields(newState);
       const dbRef = ref(database, `rooms/${this.roomCode}`);
-      set(dbRef, newState)
+      set(dbRef, lightState)
         .then(() => {
-          if (newState.isPublic) {
-            this.updatePublicRoomsList(newState);
-          }
+          if (newState.isPublic) this.updatePublicRoomsList(newState);
         })
-        .catch(err => console.error("Firebase write error:", err));
+        .catch(err => {
+          console.error('Firebase saveAndBroadcast error:', err);
+          if (err.code === 'PERMISSION_DENIED') {
+            alert('Firebase Permission Denied! Set Realtime Database Rules to Test Mode.');
+          }
+        });
     } else {
-      try {
-        localStorage.setItem(this.storageKey, JSON.stringify(newState));
-
-        if (newState.isPublic) {
-          this.updatePublicRoomsList(newState);
-        }
-
-        if (this.broadcastChannel) {
-          this.broadcastChannel.postMessage(newState);
-        }
-        this.onStateChange(newState);
-      } catch (e) {
-        console.error('Broadcast failed:', e);
-      }
+      this._broadcastLocal(newState);
+      this.onStateChange(newState);
     }
   }
 
@@ -207,13 +309,12 @@ export class RoomSync {
 
     if (isConfigured && database) {
       const publicRef = ref(database, `public_rooms/${this.roomCode}`);
-      set(publicRef, roomSummary).catch(err => console.error("Firebase public room write error:", err));
+      set(publicRef, roomSummary).catch(err => console.error("Public room update error:", err));
     } else {
       try {
         const rawList = localStorage.getItem('football_auction_public_rooms');
         let list = rawList ? JSON.parse(rawList) : [];
         const index = list.findIndex(r => r.roomCode === roomState.roomCode);
-
         if (index !== -1) {
           list[index] = roomSummary;
         } else {
@@ -229,20 +330,15 @@ export class RoomSync {
   static getPublicRooms(callback) {
     if (isConfigured && database) {
       const publicRef = ref(database, 'public_rooms');
-      return onValue(publicRef, (snapshot) => {
+      const unsubFn = onValue(publicRef, (snapshot) => {
         const val = snapshot.val();
-        if (val) {
-          const list = Object.values(val);
-          callback(list);
-        } else {
-          callback([]);
-        }
+        callback(val ? Object.values(val) : []);
       });
+      return unsubFn;
     } else {
       try {
         const raw = localStorage.getItem('football_auction_public_rooms');
-        const list = raw ? JSON.parse(raw) : [];
-        callback(list);
+        callback(raw ? JSON.parse(raw) : []);
       } catch (e) {
         callback([]);
       }
@@ -252,9 +348,9 @@ export class RoomSync {
 
   close() {
     if (isConfigured && database) {
-      if (this.firebaseListener) {
-        const dbRef = ref(database, `rooms/${this.roomCode}`);
-        off(dbRef);
+      if (this.unsubscribeFn) {
+        this.unsubscribeFn(); // Properly unsubscribe using the returned function
+        this.unsubscribeFn = null;
       }
     } else {
       if (this.broadcastChannel) {

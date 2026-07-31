@@ -94,7 +94,9 @@ export default function App() {
     setCurrentBid(state.currentBid || 0);
     setHighestBidder(state.highestBidder || null);
     setTimerSeconds(state.timerSeconds !== undefined ? state.timerSeconds : 10);
-    if (state.availableDeck) setAvailableDeck(state.availableDeck);
+    // IMPORTANT: Never sync availableDeck from Firebase — always use local PLAYER_DATABASE
+    // This prevents 250-player JSON being written to Firebase on every timer tick
+    setAvailableDeck(PLAYER_DATABASE);
     if (state.managers) setManagers(state.managers);
     if (state.chatMessages) setChatMessages(state.chatMessages);
     if (state.activityLogs) setActivityLogs(state.activityLogs);
@@ -113,8 +115,10 @@ export default function App() {
 
   const broadcastStateChange = (updatedFields) => {
     const currentState = roomSyncRef.current?.getRoomState() || {};
+    // Never include availableDeck in Firebase sync - it is sourced locally
+    const { availableDeck: _deck, ...lightCurrentState } = currentState;
     const newState = {
-      ...currentState,
+      ...lightCurrentState,
       ...updatedFields
     };
     applyRoomState(newState);
