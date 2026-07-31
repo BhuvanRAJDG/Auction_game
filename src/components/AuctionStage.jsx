@@ -36,6 +36,7 @@ export default function AuctionStage({
   const progressPct = timerSeconds != null ? (timerSeconds / maxTimer) * 100 : 100;
   const isDanger = timerSeconds != null && timerSeconds <= 5;
   const nextBid = currentBid + bidIncrement;
+  const isHighestBidder = highestBidder?.id === myUserId;
   const canBid = !isPaused && !isHighestBidder && userBudget >= nextBid && currentLot;
 
   const handleBid = () => { if (canBid) onPlaceBid(nextBid); };
